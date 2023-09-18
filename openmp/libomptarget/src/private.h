@@ -433,7 +433,8 @@ public:
   SourceInfo SI(IDENT);                                                        \
   std::string ProfileLocation = SI.getProfileLocation();                       \
   std::string RTM = RegionTypeMsg;                                             \
-  llvm::TimeTraceScope TimeScope(__FUNCTION__, ProfileLocation + RTM)
+  llvm::TimeTraceScope TimeScope(ProfileLocation, ProfileLocation + RTM)
+  //llvm::TimeTraceScope TimeScope(__FUNCTION__, ProfileLocation + RTM)
 #else
 #define TIMESCOPE()
 #define TIMESCOPE_WITH_IDENT(IDENT)
