@@ -434,16 +434,19 @@ public:
   std::string ProfileLocation = SI.getProfileLocation();                       \
   std::string ProfileName = SI.getName();                                      \
   std::string RTM = RegionTypeMsg;                                             \
-  llvm::TimeTraceScope TimeScope(RegionTypeMsg, ProfileLocation + RTM)
-  //llvm::TimeTraceScope TimeScope(__FUNCTION__, ProfileLocation + RTM)
+  llvm::TimeTraceScope TimeScope(__FUNCTION__, ProfileLocation + RTM)
+  //llvm::TimeTraceScope TimeScope(RegionTypeMsg, ProfileLocation + RTM)
 #define TIMESCOPE_WITH_DETAILS_AND_IDENT(RegionTypeMsg, Details, IDENT)        \
   SourceInfo SI(IDENT);                                                        \
   std::string ProfileLocation = SI.getProfileLocation();                       \
   llvm::TimeTraceScope TimeScope(RegionTypeMsg, ProfileLocation + Details)
+#define TIMESCOPE_WITH_DETAILS(Details)                                        \
+  llvm::TimeTraceScope TimeScope(__FUNCTION__, Details)
 #else
 #define TIMESCOPE()
 #define TIMESCOPE_WITH_IDENT(IDENT)
 #define TIMESCOPE_WITH_NAME_AND_IDENT(NAME, IDENT)
 #define TIMESCOPE_WITH_RTM_AND_IDENT(RegionTypeMsg, IDENT)
 #define TIMESCOPE_WITH_DETAILS_AND_IDENT(RegionTypeMsg, Details, IDENT)
+#define TIMESCOPE_WITH_DETAILS(Details)
 #endif
