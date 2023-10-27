@@ -449,7 +449,9 @@ public:
 #define TIMESCOPE_WITH_DETAILS_AND_IDENT(RegionTypeMsg, Details, IDENT)        \
   SourceInfo SI(IDENT);                                                        \
   std::string ProfileLocation = SI.getProfileLocation();                       \
-  llvm::TimeTraceScope TimeScope(RegionTypeMsg, ProfileLocation + Details)
+  std::string kernelName = SI.getName();                                       \
+  llvm::TimeTraceScope TimeScope(RegionTypeMsg+kernelName,                     \
+                                ProfileLocation + Details)
 #define TIMESCOPE_WITH_DETAILS(Details)                                        \
   llvm::TimeTraceScope TimeScope(__FUNCTION__, Details)
 #else
