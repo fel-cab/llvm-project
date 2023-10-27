@@ -2411,10 +2411,15 @@ static bool CheckEvaluationResult(CheckEvaluationResultKind CERK,
                                   const FieldDecl *SubobjectDecl,
                                   CheckedTemporaries &CheckedTemps) {
   if (!Value.hasValue()) {
-    assert(SubobjectDecl && "SubobjectDecl shall be non-null");
-    Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized) << SubobjectDecl;
-    Info.Note(SubobjectDecl->getLocation(),
-              diag::note_constexpr_subobject_declared_here);
+    if (SubobjectDecl) {
+      Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized)
+          << /*(name)*/ 1 << SubobjectDecl;
+      Info.Note(SubobjectDecl->getLocation(),
+                diag::note_constexpr_subobject_declared_here);
+    } else {
+      Info.FFDiag(DiagLoc, diag::note_constexpr_uninitialized)
+          << /*of type*/ 0 << Type;
+    }
     return false;
   }
 
@@ -3356,6 +3361,9 @@ static bool evaluateVarDeclInit(EvalInfo &Info, const Expr *E,
     }
     return false;
   }
+
+  if (E->isValueDependent())
+    return false;
 
   // Dig out the initializer, and use the declaration which it's attached to.
   // FIXME: We should eventually check whether the variable has a reachable
@@ -4869,8 +4877,13 @@ static bool HandleBaseToDerivedCast(EvalInfo &Info, const CastExpr *E,
 
 /// Get the value to use for a default-initialized object of type T.
 /// Return false if it encounters something invalid.
-static bool getDefaultInitValue(QualType T, APValue &Result) {
+static bool handleDefaultInitValue(QualType T, APValue &Result) {
   bool Success = true;
+
+  // If there is already a value present don't overwrite it.
+  if (!Result.isAbsent())
+    return true;
+
   if (auto *RD = T->getAsCXXRecordDecl()) {
     if (RD->isInvalidDecl()) {
       Result = APValue();
@@ -4887,13 +4900,14 @@ static bool getDefaultInitValue(QualType T, APValue &Result) {
     for (CXXRecordDecl::base_class_const_iterator I = RD->bases_begin(),
                                                   End = RD->bases_end();
          I != End; ++I, ++Index)
-      Success &= getDefaultInitValue(I->getType(), Result.getStructBase(Index));
+      Success &=
+          handleDefaultInitValue(I->getType(), Result.getStructBase(Index));
 
     for (const auto *I : RD->fields()) {
       if (I->isUnnamedBitfield())
         continue;
-      Success &= getDefaultInitValue(I->getType(),
-                                     Result.getStructField(I->getFieldIndex()));
+      Success &= handleDefaultInitValue(
+          I->getType(), Result.getStructField(I->getFieldIndex()));
     }
     return Success;
   }
@@ -4903,7 +4917,7 @@ static bool getDefaultInitValue(QualType T, APValue &Result) {
     Result = APValue(APValue::UninitArray(), 0, AT->getSize().getZExtValue());
     if (Result.hasArrayFiller())
       Success &=
-          getDefaultInitValue(AT->getElementType(), Result.getArrayFiller());
+          handleDefaultInitValue(AT->getElementType(), Result.getArrayFiller());
 
     return Success;
   }
@@ -4944,7 +4958,7 @@ static bool EvaluateVarDecl(EvalInfo &Info, const VarDecl *VD) {
   if (!InitE) {
     if (VD->getType()->isDependentType())
       return Info.noteSideEffect();
-    return getDefaultInitValue(VD->getType(), Val);
+    return handleDefaultInitValue(VD->getType(), Val);
   }
   if (InitE->isValueDependent())
     return false;
@@ -6046,7 +6060,7 @@ struct StartLifetimeOfUnionMemberHandler {
       return false;
     }
     APValue Result;
-    Failed = !getDefaultInitValue(Field->getType(), Result);
+    Failed = !handleDefaultInitValue(Field->getType(), Result);
     Subobj.setUnion(Field, Result);
     return true;
   }
@@ -6398,7 +6412,7 @@ static bool HandleConstructorCall(const Expr *E, const LValue &This,
     for (; !declaresSameEntity(*FieldIt, FD); ++FieldIt) {
       assert(FieldIt != RD->field_end() && "missing field?");
       if (!FieldIt->isUnnamedBitfield())
-        Success &= getDefaultInitValue(
+        Success &= handleDefaultInitValue(
             FieldIt->getType(),
             Result.getStructField(FieldIt->getFieldIndex()));
     }
@@ -6455,7 +6469,8 @@ static bool HandleConstructorCall(const Expr *E, const LValue &This,
             // FIXME: This immediately starts the lifetime of all members of
             // an anonymous struct. It would be preferable to strictly start
             // member lifetime in initialization order.
-            Success &= getDefaultInitValue(Info.Ctx.getRecordType(CD), *Value);
+            Success &=
+                handleDefaultInitValue(Info.Ctx.getRecordType(CD), *Value);
         }
         // Store Subobject as its parent before updating it for the last element
         // in the chain.
@@ -6507,7 +6522,7 @@ static bool HandleConstructorCall(const Expr *E, const LValue &This,
   if (!RD->isUnion()) {
     for (; FieldIt != RD->field_end(); ++FieldIt) {
       if (!FieldIt->isUnnamedBitfield())
-        Success &= getDefaultInitValue(
+        Success &= handleDefaultInitValue(
             FieldIt->getType(),
             Result.getStructField(FieldIt->getFieldIndex()));
     }
@@ -6857,8 +6872,8 @@ static std::optional<DynAlloc *> CheckDeleteKind(EvalInfo &Info, const Expr *E,
     return std::nullopt;
   }
 
-  QualType AllocType = Pointer.Base.getDynamicAllocType();
   if (DeallocKind != (*Alloc)->getKind()) {
+    QualType AllocType = Pointer.Base.getDynamicAllocType();
     Info.FFDiag(E, diag::note_constexpr_new_delete_mismatch)
         << DeallocKind << (*Alloc)->getKind() << AllocType;
     NoteLValueLocation(Info, Pointer.Base);
@@ -8367,7 +8382,13 @@ bool LValueExprEvaluator::VisitVarDecl(const Expr *E, const VarDecl *VD) {
 
     if (auto *FD = Info.CurrentCall->LambdaCaptureFields.lookup(VD)) {
       // Start with 'Result' referring to the complete closure object...
-      Result = *Info.CurrentCall->This;
+      if (auto *MD = cast<CXXMethodDecl>(Info.CurrentCall->Callee);
+          MD->isExplicitObjectMemberFunction()) {
+        APValue *RefValue =
+            Info.getParamSlot(Info.CurrentCall->Arguments, MD->getParamDecl(0));
+        Result.setFrom(Info.Ctx, *RefValue);
+      } else
+        Result = *Info.CurrentCall->This;
       // ... then update it to refer to the field of the closure object
       // that represents the capture.
       if (!HandleLValueMember(Info, E, Result, FD))
@@ -9536,6 +9557,8 @@ bool PointerExprEvaluator::VisitBuiltinCallExpr(const CallExpr *E,
 
     // Figure out how many T's we're copying.
     uint64_t TSize = Info.Ctx.getTypeSizeInChars(T).getQuantity();
+    if (TSize == 0)
+      return false;
     if (!WChar) {
       uint64_t Remainder;
       llvm::APInt OrigN = N;
@@ -9812,7 +9835,7 @@ bool PointerExprEvaluator::VisitCXXNewExpr(const CXXNewExpr *E) {
   } else if (Init) {
     if (!EvaluateInPlace(*Val, Info, Result, Init))
       return false;
-  } else if (!getDefaultInitValue(AllocType, *Val)) {
+  } else if (!handleDefaultInitValue(AllocType, *Val)) {
     return false;
   }
 
@@ -10222,7 +10245,7 @@ bool RecordExprEvaluator::VisitCXXConstructExpr(const CXXConstructExpr *E,
     if (ZeroInit)
       return ZeroInitialization(E, T);
 
-    return getDefaultInitValue(T, Result);
+    return handleDefaultInitValue(T, Result);
   }
 
   const FunctionDecl *Definition = nullptr;
@@ -13586,6 +13609,20 @@ bool IntExprEvaluator::VisitUnaryExprOrTypeTraitExpr(
                     Info.Ctx.getOpenMPDefaultSimdAlign(E->getArgumentType()))
             .getQuantity(),
         E);
+  case UETT_VectorElements: {
+    QualType Ty = E->getTypeOfArgument();
+    // If the vector has a fixed size, we can determine the number of elements
+    // at compile time.
+    if (Ty->isVectorType())
+      return Success(Ty->castAs<VectorType>()->getNumElements(), E);
+
+    assert(Ty->isSizelessVectorType());
+    if (Info.InConstantContext)
+      Info.CCEDiag(E, diag::note_constexpr_non_const_vectorelements)
+          << E->getSourceRange();
+
+    return false;
+  }
   }
 
   llvm_unreachable("unknown expr/type trait");
@@ -15318,6 +15355,17 @@ static bool FastEvaluateAsRValue(const Expr *Exp, Expr::EvalResult &Result,
     return true;
   }
 
+  if (const auto *CE = dyn_cast<ConstantExpr>(Exp)) {
+    if (CE->hasAPValueResult()) {
+      Result.Val = CE->getAPValueResult();
+      IsConst = true;
+      return true;
+    }
+
+    // The SubExpr is usually just an IntegerLiteral.
+    return FastEvaluateAsRValue(CE->getSubExpr(), Result, Ctx, IsConst);
+  }
+
   // This case should be rare, but we need to check it before we check on
   // the type below.
   if (Exp->getType().isNull()) {
@@ -15619,7 +15667,7 @@ bool VarDecl::evaluateDestruction(
   APValue DestroyedValue;
   if (getEvaluatedValue() && !getEvaluatedValue()->isAbsent())
     DestroyedValue = *getEvaluatedValue();
-  else if (!getDefaultInitValue(getType(), DestroyedValue))
+  else if (!handleDefaultInitValue(getType(), DestroyedValue))
     return false;
 
   if (!EvaluateDestruction(getASTContext(), this, std::move(DestroyedValue),
