@@ -306,7 +306,7 @@ static inline int targetKernel(ident_t *Loc, int64_t DeviceId, int32_t NumTeams,
   int Rc = OFFLOAD_SUCCESS;
   Rc = target(Loc, Device, HostPtr, *KernelArgs, AsyncInfo);
   { // required to show syncronization
-    TIMESCOPE_WITH_RTM_AND_IDENT("syncronize", Loc);
+    TIMESCOPE_WITH_DETAILS_AND_IDENT("syncronize:","", Loc);
     if (Rc == OFFLOAD_SUCCESS)
       Rc = AsyncInfo.synchronize();
 
