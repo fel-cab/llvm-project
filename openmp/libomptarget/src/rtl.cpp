@@ -66,7 +66,7 @@ __attribute__((constructor(101))) void init() {
   ProfileTraceFile = getenv("LIBOMPTARGET_PROFILE");
   // TODO: add a configuration option for time granularity
   if (ProfileTraceFile)
-    timeTraceProfilerInitialize(0 /* us */, "libomptarget");
+    timeTraceProfilerInitialize(2 /* us */, "libomptarget");
 
 #ifdef OMPT_SUPPORT
   // Initialize OMPT first
